@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: purely-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      initContainers:
+        - name: wait-for-mongo
+          image: busybox
+          command:
+            - sh
+            - -c
+            - "until nc -z -v -w30 purely-order-service 27017; do echo 'Waiting for MongoDB...'; sleep 5; done;"
+              
+      containers:
+        - name: order-service
+          image: mohamedelrefy20/order-service:latest
+          ports:
+            - containerPort: 9070
+          envFrom:
+          - configMapRef:
+              name: order-service-config
+          env:
+          - name: MONGO_USER
+            valueFrom:
+              secretKeyRef:
+                name: secrets
+                key: MONGO_USER
+          - name: MONGO_PASS
+            valueFrom:
+              secretKeyRef:
+                name: secrets
+                key: MONGO_PASS
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: purely-app
+spec:
+  selector:
+    app: order-service
+  ports:
+    - protocol: TCP
+      port: 9070
+      targetPort: 9070
+  type: ClusterIP
