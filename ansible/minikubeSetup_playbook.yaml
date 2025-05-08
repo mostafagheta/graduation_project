@@ -1,0 +1,53 @@
+---
+- name: Copy and extract init script services to Minikube
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    base_dir: "./graduation_project-main/src/mongo-init"
+    minikube_target_dir: "/home/init-script"
+
+  tasks:
+    # === purely_category_service ===
+    - name: Create tar.gz archive of purely_category_service
+      command: tar -czf purely_category_service.tar.gz purely_category_service
+      args:
+        chdir: "{{ base_dir }}"
+
+    - name: Copy archive to Minikube VM (purely_category_service)
+      command: minikube cp {{ base_dir }}/purely_category_service.tar.gz /home/
+
+    - name: Extract purely_category_service in Minikube VM
+      shell: |
+        minikube ssh -- "
+         sudo mkdir -p {{ minikube_target_dir }} &&
+          sudo tar -xzf /home/purely_category_service.tar.gz -C {{ minikube_target_dir }} &&
+          sudo rm /home/purely_category_service.tar.gz
+        "
+
+    - name: Remove local archive (purely_category_service)
+      file:
+        path: "{{ base_dir }}/purely_category_service.tar.gz"
+        state: absent
+
+    # === purely_product_service ===
+    - name: Create tar.gz archive of purely_product_service
+      command: sudo tar -czf purely_product_service.tar.gz purely_product_service
+      args:
+        chdir: "{{ base_dir }}"
+
+    - name: Copy archive to Minikube VM (purely_product_service)
+      command: minikube cp {{ base_dir }}/purely_product_service.tar.gz /home/
+
+    - name: Extract purely_product_service in Minikube VM
+      shell: |
+        minikube ssh -- "
+         sudo tar -xzf /home/purely_product_service.tar.gz -C {{ minikube_target_dir }} &&
+         sudo rm /home/purely_product_service.tar.gz
+        "
+
+    - name: Remove local archive (purely_product_service)
+      file:
+        path: "{{ base_dir }}/purely_product_service.tar.gz"
+        state: absent
