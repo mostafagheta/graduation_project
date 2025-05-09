@@ -1,7 +1,11 @@
 ---
-- name: Install Docker, Minikube, and Node Exporter
+- name: Install Docker, Minikube, Helm, and Node Exporter
   hosts: webservers
   become: true
+  vars:
+    base_dir: "~/Desktop/Graduation_Project/mongo-init"
+    minikube_target_dir: "/home/init-script"
+
   tasks:
 
     - name: Update system packages
@@ -14,17 +18,21 @@
           - ca-certificates
           - curl
           - gnupg
+          - lsb-release
+          - git
         state: present
 
     - name: Add Docker GPG key
-      shell: |
-        install -m 0755 -d /etc/apt/keyrings
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | tee /etc/apt/keyrings/docker.asc > /dev/null
-        chmod a+r /etc/apt/keyrings/docker.asc
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        keyring: /etc/apt/keyrings/docker.gpg
+        state: present
 
     - name: Add Docker repository
-      shell: |
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+      apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        filename: docker
+        state: present
 
     - name: Update package cache after adding Docker repo
       apt:
@@ -64,10 +72,36 @@
         mode: '0755'
 
     - name: Start Minikube
-      command: minikube start --driver=docker 
-      become: yes
+      become: false
+      command: minikube start --driver=docker
       environment:
-        USER: "{{ ansible_user }}"
+        PATH: "{{ ansible_env.PATH }}"
+        HOME: "{{ ansible_env.HOME }}"
+        MINIKUBE_HOME: "{{ ansible_env.HOME }}"
+
+    - name: Enable Minikube Ingress addon
+      become: false
+      command: minikube addons enable ingress --profile=minikube
+      environment:
+        PATH: "{{ ansible_env.PATH }}"
+        HOME: "{{ ansible_env.HOME }}"
+        MINIKUBE_HOME: "{{ ansible_env.HOME }}"
+
+    - name: Download Helm installation script
+      get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /tmp/get_helm.sh
+        mode: '0755'
+
+    - name: Install Helm
+      command: bash /tmp/get_helm.sh
+
+    - name: Clone GitHub repository
+      git:
+        repo: "git@github.com:MohamedElrefy/Graduation_Project.git"
+        dest: ~/Desktop
+        version: main
+        update: yes
 
     - name: Download Prometheus Node Exporter
       get_url:
@@ -75,11 +109,17 @@
         dest: /tmp/node_exporter.tar.gz
 
     - name: Extract Node Exporter
-      ansible.builtin.unarchive:
+      unarchive:
         src: /tmp/node_exporter.tar.gz
-        dest: /usr/local/bin/
+        dest: /opt/node_exporter/
         remote_src: yes
         extra_opts: [--strip-components=1]
+
+    - name: Symlink Node Exporter binary
+      file:
+        src: /opt/node_exporter/node_exporter
+        dest: /usr/local/bin/node_exporter
+        state: link
 
     - name: Create a systemd service for Node Exporter
       copy:
@@ -106,3 +146,68 @@
         name: node_exporter
         state: started
         enabled: yes
+
+    - name: Create tar.gz archive of purely_category_service
+      command: tar -czf purely_category_service.tar.gz purely_category_service
+      args:
+        chdir: "{{ base_dir }}"
+
+    - name: Copy archive to Minikube VM (purely_category_service)
+      command: minikube cp {{ base_dir }}/purely_category_service.tar.gz /home/
+
+    - name: Extract purely_category_service in Minikube VM
+      shell: |
+        minikube ssh -- "
+         sudo mkdir -p {{ minikube_target_dir }} &&
+          sudo tar -xzf /home/purely_category_service.tar.gz -C {{ minikube_target_dir }} &&
+          sudo rm /home/purely_category_service.tar.gz
+        "
+
+    - name: Remove local archive (purely_category_service)
+      file:
+        path: "{{ base_dir }}/purely_category_service.tar.gz"
+        state: absent
+
+    - name: Create tar.gz archive of purely_product_service
+      command: sudo tar -czf purely_product_service.tar.gz purely_product_service
+      args:
+        chdir: "{{ base_dir }}"
+
+    - name: Copy archive to Minikube VM (purely_product_service)
+      command: minikube cp {{ base_dir }}/purely_product_service.tar.gz /home/
+
+    - name: Extract purely_product_service in Minikube VM
+      shell: |
+        minikube ssh -- "
+         sudo tar -xzf /home/purely_product_service.tar.gz -C {{ minikube_target_dir }} &&
+         sudo rm /home/purely_product_service.tar.gz
+        "
+
+    - name: Remove local archive (purely_product_service)
+      file:
+        path: "{{ base_dir }}/purely_product_service.tar.gz"
+        state: absent
+
+    - name: Install Helm chart (graduation-release)
+      become: false
+      command: >
+        helm install graduation-release .
+      args:
+        chdir: ~/Desktop/Graduation_Project/Helm
+      environment:
+        KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+        PATH: "{{ ansible_env.PATH }}"
+        HOME: "{{ ansible_env.HOME }}"
+      notify:
+        - Port-forward frontend service
+
+  handlers:
+    - name: Port-forward frontend service
+      become: false
+      shell: nohup kubectl port-forward svc/frontend 3000:80 -n purely-app > frontend.log 2>&1 &
+      args:
+        chdir: "{{ ansible_env.HOME }}"
+      environment:
+        KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+        PATH: "{{ ansible_env.PATH }}"
+        HOME: "{{ ansible_env.HOME }}"
